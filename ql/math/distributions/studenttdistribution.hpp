@@ -72,21 +72,20 @@ namespace QuantLib {
     };
 
     //! Inverse cumulative Student t-distribution
-    /*! \todo Find/implement an efficient algorithm for evaluating the
-              cumulative Student t-distribution, replacing the Newton
-              iteration
+    /*! The implementation uses closed-form formulas for 1 and 2
+        degrees of freedom and a Brent solve of the upper tail otherwise.
     */
     class InverseCumulativeStudent {
       public:
         InverseCumulativeStudent(Integer n,
                                  Real accuracy = 1e-6,
                                  Size maxIterations = 50)
-        : d_(n), f_(n), accuracy_(accuracy),
-          maxIterations_(maxIterations) {}
+        : n_(n), accuracy_(accuracy), maxIterations_(maxIterations) {
+            QL_REQUIRE(n > 0, "invalid parameter for t-distribution");
+        }
         Real operator()(Real x) const;
       private:
-        StudentDistribution d_;
-        CumulativeStudentDistribution f_;
+        Integer n_;
         Real accuracy_;
         Size maxIterations_;
     };

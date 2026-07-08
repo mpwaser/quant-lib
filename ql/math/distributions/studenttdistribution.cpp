@@ -19,9 +19,63 @@
 
 #include <ql/math/distributions/studenttdistribution.hpp>
 #include <ql/math/distributions/gammadistribution.hpp>
+#include <ql/math/solvers1d/brent.hpp>
+#include <ql/math/comparison.hpp>
 #include <ql/math/beta.hpp>
 
 namespace QuantLib {
+
+    namespace {
+
+        Real cumulativeStudentTail(Integer n, Real x) {
+            QL_REQUIRE (x >= 0.0, "non-negative argument required");
+
+            if (x == 0.0)
+                return 0.5;
+
+            const Real scaledX = x / std::sqrt (static_cast<Real>(n));
+            const Real z = 1.0 / (1.0 + scaledX*scaledX);
+
+            if (z <= 0.0)
+                return 0.0;
+
+            return 0.5 *
+                incompleteBetaFunction (0.5 * n, 0.5, z);
+        }
+
+        class StudentTRoot {
+          public:
+            StudentTRoot(Integer n, Real target)
+            : n_(n), target_(target) {}
+
+            Real operator()(Real x) const {
+                return cumulativeStudentTail(n_, x) - target_;
+            }
+
+          private:
+            Integer n_;
+            Real target_;
+        };
+
+        Real inverseCumulativeCauchy(Real tail) {
+            const Real t = std::tan (M_PI * tail);
+
+            if (t == 0.0)
+                return QL_MAX_REAL;
+
+            return 1.0 / t;
+        }
+
+        Real inverseCumulativeStudent2(Real tail) {
+            const Real denominator = std::sqrt (2.0 * tail * (1.0 - tail));
+
+            if (denominator == 0.0)
+                return QL_MAX_REAL;
+
+            return (1.0 - 2.0 * tail) / denominator;
+        }
+
+    }
 
     Real StudentDistribution::operator()(Real x) const {
         static GammaFunction G;
@@ -42,25 +96,56 @@ namespace QuantLib {
     }
 
     Real InverseCumulativeStudent::operator()(Real y) const {
-        QL_REQUIRE (y >= 0 && y <= 1, "argument out of range [0, 1]");
-
-        Real x = 0;
-        Size count = 0;
-
-        // do a few newton steps to find x
-        do {
-            x -= (f_(x) - y) / d_(x);
-            count++;
+        if (y <= 0.0 || y >= 1.0) {
+            if (close_enough(y, 1.0)) {
+                return QL_MAX_REAL;
+            } else if (std::fabs (y) < QL_EPSILON) {
+                return QL_MIN_REAL;
+            } else {
+                QL_FAIL("InverseCumulativeStudent(" << y
+                        << ") undefined: must be 0 < x < 1");
+            }
         }
-        while (std::fabs(f_(x) - y) > accuracy_ && count < maxIterations_);
 
-        QL_REQUIRE (count < maxIterations_,
-                    "maximum number of iterations " << maxIterations_
-                    << " reached in InverseCumulativeStudent, "
-                    << "y=" << y << ", x=" << x);
+        if (y == 0.5)
+            return 0.0;
 
-        return x;
+        QL_REQUIRE (accuracy_ > 0.0,
+                    "accuracy (" << accuracy_ << ") must be positive");
+        QL_REQUIRE (maxIterations_ > 0,
+                    "maximum number of iterations (" << maxIterations_
+                    << ") must be positive");
+
+        const bool upper = y > 0.5;
+        const Real target = upper ? 1.0 - y : y;
+
+        Real x;
+        if (n_ == 1) {
+            x = inverseCumulativeCauchy(target);
+        } else if (n_ == 2) {
+            x = inverseCumulativeStudent2(target);
+        } else {
+            const StudentTRoot f(n_, target);
+            Real xMin = 0.0, xMax = 1.0;
+            Size evaluations = 1;
+
+            while (f(xMax) > 0.0) {
+                QL_REQUIRE (evaluations < maxIterations_,
+                            "unable to bracket Student t inverse "
+                            "cumulative distribution root");
+                QL_REQUIRE (xMax < QL_MAX_REAL/2.0,
+                            "unable to bracket Student t inverse "
+                            "cumulative distribution root");
+                xMax *= 2.0;
+                ++evaluations;
+            }
+
+            Brent solver;
+            solver.setMaxEvaluations(maxIterations_);
+            x = solver.solve(f, accuracy_, 0.5 * (xMin + xMax), xMin, xMax);
+        }
+
+        return upper ? x : -x;
     }
 
 }
-
